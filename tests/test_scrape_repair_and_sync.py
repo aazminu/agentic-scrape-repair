@@ -1,0 +1,94 @@
+from __future__ import annotations
+
+import pytest
+
+from agentic_scrape_repair import (
+    AgenticDOMRepairEngine,
+    FieldSelectorSpec,
+    SlackChangeSyncOrchestrator,
+)
+
+
+def test_dom_repair_engine_heals_broken_selector_with_schema_verification() -> None:
+    # Upstream website renamed `span.legacy-price` to `div[data-testid="product-price-usd"]`
+    mutated_html = """
+    <html>
+      <body>
+        <div class="card">
+          <h2 data-testid="item-title">Enterprise Router X1</h2>
+          <div data-testid="product-price-usd">$1,249.00</div>
+        </div>
+        <div class="card">
+          <h2 data-testid="item-title"> Optical Switch S8</h2>
+          <div data-testid="product-price-usd">$899.50</div>
+        </div>
+      </body>
+    </html>
+    """
+    spec = FieldSelectorSpec(
+        field_name="price_usd",
+        legacy_selector="span.legacy-price",
+        expected_tag="div",
+        semantic_tokens=("price", "usd"),
+        value_regex=r"^\$[0-9,]+\.[0-9]{2}$",
+    )
+    engine = AgenticDOMRepairEngine(min_confidence=0.6)
+    res = engine.repair_and_verify(mutated_html, spec, min_records=2)
+
+    assert res.schema_verified is True
+    assert res.repaired_selector == 'div[data-testid="product-price-usd"]'
+    assert res.extracted_values == ["$1,249.00", "$899.50"]
+    assert res.confidence_score >= 0.85
+
+
+def test_dom_repair_rejects_unverified_schema_when_values_corrupted() -> None:
+    corrupted_html = """
+    <html>
+      <body>
+        <div data-testid="product-price-usd">Contact Sales</div>
+      </body>
+    </html>
+    """
+    spec = FieldSelectorSpec(
+        field_name="price_usd",
+        legacy_selector="span.legacy-price",
+        expected_tag="div",
+        semantic_tokens=("price", "usd"),
+        value_regex=r"^\$[0-9,]+\.[0-9]{2}$",
+    )
+    engine = AgenticDOMRepairEngine(min_confidence=0.6)
+    res = engine.repair_and_verify(corrupted_html, spec, min_records=1)
+    assert res.schema_verified is False
+
+
+def test_slack_change_sync_orchestrator_idempotency_and_lifecycle() -> None:
+    orch = SlackChangeSyncOrchestrator()
+    rec1 = orch.submit_slack_change_request(
+        event_id="evt_9001",
+        rally_story_id="US48210",
+        github_pr_url="https://github.com/aazminu/agentic-scrape-repair/pull/1",
+        service_name="billing-scraper-worker",
+        risk_level="LOW",
+    )
+    # Duplicate Slack retry with same event_id must be idempotent
+    rec_dup = orch.submit_slack_change_request(
+        event_id="evt_9001",
+        rally_story_id="US48210",
+        github_pr_url="https://github.com/aazminu/agentic-scrape-repair/pull/1",
+        service_name="billing-scraper-worker",
+        risk_level="LOW",
+    )
+    assert rec1.change_id == rec_dup.change_id
+    assert len(rec_dup.audit_events) == 4
+    assert rec1.status == "READY_TO_DEPLOY"
+
+    closed = orch.record_github_pr_merged("evt_9002", rec1.change_id, commit_sha="a1b2c3d")
+    assert closed.status == "DEPLOYED_AND_CLOSED"
+
+    with pytest.raises(ValueError, match="rally_story_id"):
+        orch.submit_slack_change_request(
+            event_id="evt_bad",
+            rally_story_id="STORY-123",
+            github_pr_url="https://github.com/aazminu/agentic-scrape-repair/pull/1",
+            service_name="svc",
+        )
