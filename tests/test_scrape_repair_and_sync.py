@@ -125,3 +125,44 @@ def test_slack_change_sync_orchestrator_idempotency_and_lifecycle() -> None:
             github_pr_url="https://github.com/aazminu/agentic-scrape-repair/pull/1",
             service_name="svc",
         )
+
+
+def test_cli_benchmark_markdown_json_and_reproducibility(
+    capsys: pytest.CaptureFixture[str], tmp_path: pytest.TempPathFactory
+) -> None:
+    import json
+    import subprocess
+    import sys
+    from pathlib import Path
+    from agentic_scrape_repair.__main__ import format_markdown_table, main, run_benchmark
+
+    rows_1 = run_benchmark(seed=42)
+    rows_2 = run_benchmark(seed=42)
+    assert rows_1 == rows_2
+    assert len(rows_1) == 3
+
+    md = format_markdown_table(rows_1)
+    assert "| benchmark | repaired_selector | confidence_score |" in md
+    assert "dom_selector_self_healing" in md
+    assert "idempotent_change_sync_lifecycle" in md
+
+    out_path = Path(str(tmp_path)) / "scrape_bench.json"
+    rc = main(["--format", "json", "--seed", "42", "--output", str(out_path)])
+    assert rc == 0
+    data = json.loads(capsys.readouterr().out)
+    assert data["seed"] == 42
+    assert data["benchmarks"] == rows_1
+    assert json.loads(out_path.read_text(encoding="utf-8")) == data
+
+    repo_root = Path(__file__).resolve().parents[1]
+    proc = subprocess.run(
+        [sys.executable, str(repo_root / "scripts" / "benchmark.py"), "--format", "markdown"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert "corrupted_payload_schema_gate" in proc.stdout
+
+    with pytest.raises(SystemExit):
+        main(["--format", "invalid_fmt"])
+
