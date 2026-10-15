@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agentic-scrape-repair"
+version = "0.2.0"
+description = "Self-healing web scraper DOM selector repair engine gated on live schema verification, paired with idempotent Slack-to-ServiceNow/Rally/GitHub change synchronization"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = []
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
