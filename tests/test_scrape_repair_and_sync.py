@@ -61,6 +61,39 @@ def test_dom_repair_rejects_unverified_schema_when_values_corrupted() -> None:
     assert res.schema_verified is False
 
 
+def test_dom_repair_handles_void_tags_and_nested_inline_spans() -> None:
+    html_with_void_and_nested = """
+    <html>
+      <head><meta charset="utf-8"><link rel="stylesheet" href="app.css"></head>
+      <body>
+        <div class="card">
+          <img src="router.png" alt="router">
+          <br>
+          <div data-testid="product-price-usd"><span class="currency">$</span>1,249.00</div>
+        </div>
+        <div class="card">
+          <img src="switch.png" alt="switch">
+          <hr>
+          <div data-testid="product-price-usd"><span class="currency">$</span>899.50</div>
+        </div>
+      </body>
+    </html>
+    """
+    spec = FieldSelectorSpec(
+        field_name="price_usd",
+        legacy_selector="span.legacy-price",
+        expected_tag="div",
+        semantic_tokens=("price", "usd"),
+        value_regex=r"^\$[0-9,]+\.[0-9]{2}$",
+    )
+    engine = AgenticDOMRepairEngine(min_confidence=0.6)
+    res = engine.repair_and_verify(html_with_void_and_nested, spec, min_records=2)
+    assert res.schema_verified is True
+    assert res.repaired_selector == 'div[data-testid="product-price-usd"]'
+    assert res.extracted_values == ["$1,249.00", "$899.50"]
+
+
+
 def test_slack_change_sync_orchestrator_idempotency_and_lifecycle() -> None:
     orch = SlackChangeSyncOrchestrator()
     rec1 = orch.submit_slack_change_request(

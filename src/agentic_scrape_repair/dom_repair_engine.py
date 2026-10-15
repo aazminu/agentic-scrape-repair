@@ -32,32 +32,80 @@ class RepairCandidateResult:
     schema_verified: bool
 
 
+VOID_HTML_TAGS = frozenset(
+    {
+        "area",
+        "base",
+        "br",
+        "col",
+        "embed",
+        "hr",
+        "img",
+        "input",
+        "link",
+        "meta",
+        "param",
+        "source",
+        "track",
+        "wbr",
+    }
+)
+
+
 class _FlatDOMParser(HTMLParser):
     def __init__(self) -> None:
         super().__init__()
         self._stack: List[Tuple[str, Dict[str, str], List[str]]] = []
         self.nodes: List[DOMNode] = []
 
-    def handle_starttag(self, tag: str, attrs: List[Tuple[str, Optional[str]]]) -> None:
-        attr_dict = {k: (v or "") for k, v in attrs}
-        self._stack.append((tag.lower(), attr_dict, []))
-
-    def handle_data(self, data: str) -> None:
-        if self._stack:
-            self._stack[-1][2].append(data)
-
-    def handle_endtag(self, tag: str) -> None:
-        if not self._stack:
-            return
-        t_name, attrs, chunks = self._stack.pop()
+    def _emit_popped(self, t_name: str, attrs: Dict[str, str], chunks: List[str]) -> None:
         parent = self._stack[-1][0] if self._stack else "document"
         text = " ".join("".join(chunks).split())
         self.nodes.append(DOMNode(tag=t_name, attrs=attrs, text=text, parent_tag=parent))
+
+    def handle_starttag(self, tag: str, attrs: List[Tuple[str, Optional[str]]]) -> None:
+        t_low = tag.lower()
+        attr_dict = {k.lower(): (v or "") for k, v in attrs}
+        if t_low in VOID_HTML_TAGS:
+            self._emit_popped(t_low, attr_dict, [])
+            return
+        self._stack.append((t_low, attr_dict, []))
+
+    def handle_startendtag(self, tag: str, attrs: List[Tuple[str, Optional[str]]]) -> None:
+        t_low = tag.lower()
+        attr_dict = {k.lower(): (v or "") for k, v in attrs}
+        self._emit_popped(t_low, attr_dict, [])
+
+    def handle_data(self, data: str) -> None:
+        for _, _, chunks in self._stack:
+            chunks.append(data)
+
+    def handle_endtag(self, tag: str) -> None:
+        t_low = tag.lower()
+        if t_low in VOID_HTML_TAGS or not self._stack:
+            return
+        # Find nearest matching open tag on the stack to handle unclosed inner tags gracefully
+        match_idx = -1
+        for idx in range(len(self._stack) - 1, -1, -1):
+            if self._stack[idx][0] == t_low:
+                match_idx = idx
+                break
+        if match_idx == -1:
+            return
+        while len(self._stack) > match_idx:
+            t_name, attrs, chunks = self._stack.pop()
+            self._emit_popped(t_name, attrs, chunks)
+
+    def flush_unclosed(self) -> None:
+        while self._stack:
+            t_name, attrs, chunks = self._stack.pop()
+            self._emit_popped(t_name, attrs, chunks)
 
 
 def parse_dom_nodes(html: str) -> List[DOMNode]:
     parser = _FlatDOMParser()
     parser.feed(html)
+    parser.flush_unclosed()
     return parser.nodes
 
 
