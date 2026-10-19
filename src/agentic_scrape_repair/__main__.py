@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import random
+import sys
 from pathlib import Path
 from typing import Any, Dict, List, Sequence
 
@@ -11,7 +13,7 @@ from .dom_repair_engine import AgenticDOMRepairEngine, FieldSelectorSpec
 
 def run_benchmark(seed: int = 42) -> List[Dict[str, Any]]:
     """Run reproducible DOM selector self-healing, void/nested HTML resilience, and change-sync benchmarks."""
-    _ = seed
+    rng = random.Random(seed)
     engine = AgenticDOMRepairEngine(min_confidence=0.6)
     spec = FieldSelectorSpec(
         field_name="price_usd",
@@ -21,21 +23,32 @@ def run_benchmark(seed: int = 42) -> List[Dict[str, Any]]:
         value_regex=r"^\$[0-9,]+\.[0-9]{2}$",
     )
 
-    # 1. Mutated DOM selector synthesis & schema verification
-    mutated_html = """
-    <html>
-      <body>
+    # 1. Mutated DOM selector synthesis & schema verification (with seeded product card batch size)
+    extra_cards = rng.randint(1, 5)
+    cards_html = [
+        """
         <div class="card">
           <img src="router.png" alt="router"><br>
           <div data-testid="product-price-usd"><span class="currency">$</span>1,249.00</div>
         </div>
+        """,
+        """
         <div class="card">
           <img src="switch.png" alt="switch"><hr>
           <div data-testid="product-price-usd"><span class="currency">$</span>899.50</div>
         </div>
-      </body>
-    </html>
-    """
+        """,
+    ]
+    for idx in range(extra_cards):
+        cards_html.append(
+            f"""
+            <div class="card">
+              <img src="node_{idx}.png" alt="node"><br>
+              <div data-testid="product-price-usd"><span class="currency">$</span>{400 + idx * 50}.00</div>
+            </div>
+            """
+        )
+    mutated_html = "<html><body>" + "\n".join(cards_html) + "</body></html>"
     healed = engine.repair_and_verify(mutated_html, spec, min_records=2)
 
     # 2. Corrupted value rejection under strict regex schema gate
@@ -143,8 +156,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         else format_markdown_table(rows)
     )
     if args.output is not None:
-        args.output.parent.mkdir(parents=True, exist_ok=True)
-        args.output.write_text(rendered + "\n", encoding="utf-8")
+        try:
+            args.output.parent.mkdir(parents=True, exist_ok=True)
+            args.output.write_text(rendered + "\n", encoding="utf-8")
+        except OSError as exc:
+            print(f"Error writing output to {args.output}: {exc}", file=sys.stderr)
+            return 1
     print(rendered)
     return 0
 
